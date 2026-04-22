@@ -10,6 +10,7 @@ import sys
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -219,21 +220,23 @@ def _build_message(row: dict, args, body_template: str):
     if bcc_addr:
         msg["Bcc"] = bcc_addr
     if args.sender:
-        msg["From"] = args.sender
+        msg["From"] = formataddr((args.sender_name or "", args.sender))
 
     msg.attach(MIMEText(body_html, "html", "utf-8"))
     return msg, bcc_addr or None
 
 
-def _send_via_api(service, msg):
+def _send_via_api(service, msg, user_id="me"):
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    return service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    return service.users().messages().send(userId=user_id, body={"raw": raw}).execute()
 
 
 def _preview(index, total, msg, bcc):
     print(f"\n{'─' * 50}")
     print(f"  Email {index}/{total}")
     print(f"{'─' * 50}")
+    if msg.get("From"):
+        print(f"  From:    {msg['From']}")
     print(f"  To:      {msg.get('To') or '—'}")
     if msg.get("Cc"):
         print(f"  Cc:      {msg['Cc']}")
@@ -329,7 +332,9 @@ RATE LIMITS
     m.add_argument("--body", required=True, metavar="FILE",
                    help="HTML file for message body (Jinja2 template)")
     m.add_argument("--from", dest="sender", metavar="ADDRESS",
-                   help="From address / display name (defaults to authenticated account)")
+                   help="From email address (defaults to authenticated account)")
+    m.add_argument("--fromname", dest="sender_name", metavar="NAME",
+                   help="From display name, e.g. 'Professor Somebody' (requires --from)")
 
     d = parser.add_argument_group("data")
     d.add_argument("--data", required=True, metavar="FILE",
@@ -361,6 +366,9 @@ RATE LIMITS
 def main():
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.sender_name and not args.sender:
+        parser.error("--fromname requires --from <email>")
 
     if not args.to and not args.cc and not args.bcc:
         parser.error(
@@ -410,7 +418,7 @@ def main():
     for i, (msg, bcc) in enumerate(messages, 1):
         recipient = msg.get("To") or msg.get("Cc") or bcc or "?"
         try:
-            _send_via_api(service, msg)
+            _send_via_api(service, msg, user_id=args.sender or "me")
             print(f"[{i}/{len(messages)}] Sent  → {recipient}")
             sent += 1
         except HttpError as exc:
